@@ -1,0 +1,93 @@
+# ---------- Deployment ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 2   # минимум 2 пода для отказоустойчивости
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp
+        image: myorg/myapp:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: "100m"     # базовая нагрузка ~0.1 CPU
+            memory: "128Mi"
+          limits:
+            cpu: "300m"     # стартовые пики
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10  # учитываем инициализацию
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      # Антиаффинити: поды разносятся по зонам
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - myapp
+            topologyKey: topology.kubernetes.io/zone
+
+---
+
+# ---------- Service ----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-service
+spec:
+  selector:
+    app: myapp
+  ports:
+  - protocol: TCP
+    port: 80         # внешний порт
+    targetPort: 8080 # контейнерный порт
+  type: ClusterIP    # внутренний доступ; можно заменить на LoadBalancer
+
+---
+
+# ---------- HorizontalPodAutoscaler ----------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: myapp
+  minReplicas: 2   # ночью
+  maxReplicas: 5   # днём (с запасом)
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
